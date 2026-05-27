@@ -167,26 +167,68 @@ def text_to_audio_b64(text: str) -> str:
         return ""
 
 # ─────────────────────────────────────────────────────────
-# Prediction helper
+# Prediction helper — MNIST-matching preprocessing
 # ─────────────────────────────────────────────────────────
+def _mnist_preprocess(thresh: np.ndarray) -> np.ndarray:
+    """
+    Converts a thresholded canvas crop into a 28×28 float array
+    that matches the MNIST format as closely as possible:
+      1. Square crop (preserve aspect ratio)
+      2. Resize digit to 20×20
+      3. Embed in 28×28 with 4-px border
+      4. Re-centre by centre-of-mass (same trick MNIST uses)
+      5. Normalise to [0, 1]
+    """
+    h, w = thresh.shape
+    # 1. Pad to square
+    size   = max(h, w)
+    square = np.zeros((size, size), dtype=np.uint8)
+    y_off  = (size - h) // 2
+    x_off  = (size - w) // 2
+    square[y_off:y_off + h, x_off:x_off + w] = thresh
+
+    # 2. Resize digit to 20×20
+    digit20 = cv2.resize(square, (20, 20), interpolation=cv2.INTER_AREA)
+
+    # 3. Embed in 28×28 (4-px border on each side)
+    img28 = np.zeros((28, 28), dtype=np.uint8)
+    img28[4:24, 4:24] = digit20
+
+    # 4. Re-centre by centre-of-mass
+    M = cv2.moments(img28)
+    if M["m00"] != 0:
+        cx     = int(M["m10"] / M["m00"])
+        cy     = int(M["m01"] / M["m00"])
+        sh_x   = 14 - cx
+        sh_y   = 14 - cy
+        mat    = np.float32([[1, 0, sh_x], [0, 1, sh_y]])
+        img28  = cv2.warpAffine(img28, mat, (28, 28),
+                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    # 5. Normalise
+    return img28.astype("float64") / 255.0
+
+
 def predict_digit(canvas_data: np.ndarray, weights: dict):
-    gray    = cv2.cvtColor(canvas_data.astype(np.uint8), cv2.COLOR_RGBA2GRAY)
-    _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
-    coords  = cv2.findNonZero(thresh)
+    # Slight blur first to smooth canvas anti-aliasing
+    gray  = cv2.cvtColor(canvas_data.astype(np.uint8), cv2.COLOR_RGBA2GRAY)
+    gray  = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, thresh = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
+
+    coords = cv2.findNonZero(thresh)
     if coords is None:
         return None, None, None
 
     x, y, w, h = cv2.boundingRect(coords)
-    pad = 20
+    pad = 15
     x1, y1 = max(x - pad, 0), max(y - pad, 0)
     x2, y2 = min(x + w + pad, thresh.shape[1]), min(y + h + pad, thresh.shape[0])
-    crop    = thresh[y1:y2, x1:x2]
+    crop   = thresh[y1:y2, x1:x2]
 
-    resized = cv2.resize(crop, (28, 28), interpolation=cv2.INTER_AREA)
-    flat    = resized.astype("float64").reshape(1, -1) / 255.0
+    flat   = _mnist_preprocess(crop).reshape(1, -1)
 
-    probs   = mlp_predict(flat, weights)[0]
-    digit   = int(np.argmax(probs))
+    probs  = mlp_predict(flat, weights)[0]
+    digit  = int(np.argmax(probs))
     return digit, LABELS[digit], probs
 
 # ─────────────────────────────────────────────────────────

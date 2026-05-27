@@ -1,9 +1,11 @@
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # suppress TF logs
+
 import streamlit as st
 import numpy as np
 import cv2
 from PIL import Image
 import io
-import os
 import base64
 from streamlit_drawable_canvas import st_canvas
 import tensorflow as tf

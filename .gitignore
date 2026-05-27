@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Model weights (will be auto-trained on first run)
+# Uncomment below if you want to exclude the model from the repo
+# bestmodel.keras
+
+# OS
+.DS_Store
+Thumbs.db

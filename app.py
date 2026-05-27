@@ -1,15 +1,10 @@
 import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
 import streamlit as st
 import numpy as np
 import cv2
 import io
 import base64
 from streamlit_drawable_canvas import st_canvas
-import joblib
-import requests
 
 # ─────────────────────────────────────────────────────────
 # Page Configuration
@@ -27,15 +22,12 @@ st.set_page_config(
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;900&display=swap');
-
 html, body, [class*="css"] { font-family: 'Outfit', sans-serif; }
-
 .stApp {
     background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
     min-height: 100vh;
 }
 header[data-testid="stHeader"] { background: transparent; }
-
 .hero-title {
     text-align: center;
     font-size: 2.8rem;
@@ -96,11 +88,6 @@ header[data-testid="stHeader"] { background: transparent; }
     margin: 4px 0;
     overflow: hidden;
 }
-.prob-bar-fill {
-    height: 100%;
-    border-radius: 8px;
-    background: linear-gradient(90deg, #a78bfa, #60a5fa);
-}
 .stButton > button {
     background: linear-gradient(135deg, #a78bfa, #60a5fa) !important;
     color: white !important;
@@ -111,7 +98,6 @@ header[data-testid="stHeader"] { background: transparent; }
     font-weight: 600 !important;
     font-family: 'Outfit', sans-serif !important;
     cursor: pointer !important;
-    transition: all 0.3s ease !important;
     box-shadow: 0 8px 25px rgba(167,139,250,0.3) !important;
     width: 100% !important;
 }
@@ -127,42 +113,44 @@ header[data-testid="stHeader"] { background: transparent; }
     text-transform: uppercase;
     margin-bottom: 0.5rem;
 }
-.info-box {
-    background: rgba(52, 211, 153, 0.08);
-    border-left: 3px solid #34d399;
-    border-radius: 8px;
-    padding: 0.8rem 1rem;
-    color: rgba(255,255,255,0.65);
-    font-size: 0.9rem;
-    margin: 1rem 0;
-}
 audio { width: 100%; border-radius: 12px; margin-top: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
-# Constants
+# Pure-numpy MLP inference (no sklearn/tensorflow needed)
 # ─────────────────────────────────────────────────────────
-MODEL_PATH = "digit_model.pkl"
 LABELS = {
     0: "Zero", 1: "One", 2: "Two", 3: "Three", 4: "Four",
     5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine"
 }
 
-# ─────────────────────────────────────────────────────────
-# Model Loading (no training on cloud — model is in repo)
-# ─────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
-def load_model():
-    if not os.path.exists(MODEL_PATH):
-        st.error(
-            "❌ `digit_model.pkl` not found. "
-            "Please run `python train_local.py` locally and commit the file."
-        )
+def load_weights():
+    weights_path = "digit_weights.npy"
+    if not os.path.exists(weights_path):
+        st.error("digit_weights.npy not found in repository.")
         st.stop()
-    return joblib.load(MODEL_PATH)
+    return np.load(weights_path, allow_pickle=True).item()
 
-model = load_model()
+def mlp_predict(X: np.ndarray, weights: dict) -> np.ndarray:
+    """
+    Pure numpy forward pass through the MLP.
+    Activation: ReLU on hidden layers, Softmax on output.
+    """
+    coefs      = weights["coefs"]
+    intercepts = weights["intercepts"]
+
+    a = X
+    for i, (W, b) in enumerate(zip(coefs, intercepts)):
+        z = a @ W + b
+        if i < len(coefs) - 1:          # hidden layers — ReLU
+            a = np.maximum(0, z)
+        else:                            # output layer — Softmax
+            z -= np.max(z, axis=1, keepdims=True)  # numerical stability
+            exp_z = np.exp(z)
+            a = exp_z / exp_z.sum(axis=1, keepdims=True)
+    return a   # shape (1, 10) — class probabilities
 
 # ─────────────────────────────────────────────────────────
 # Audio (gTTS)
@@ -181,36 +169,37 @@ def text_to_audio_b64(text: str) -> str:
 # ─────────────────────────────────────────────────────────
 # Prediction helper
 # ─────────────────────────────────────────────────────────
-def predict_digit(canvas_data: np.ndarray):
-    """
-    canvas_data: RGBA uint8 array (H x W x 4) from st_canvas
-    Returns (digit_int, label_str, probabilities_array)
-    """
-    gray = cv2.cvtColor(canvas_data.astype(np.uint8), cv2.COLOR_RGBA2GRAY)
+def predict_digit(canvas_data: np.ndarray, weights: dict):
+    gray    = cv2.cvtColor(canvas_data.astype(np.uint8), cv2.COLOR_RGBA2GRAY)
     _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
-
-    coords = cv2.findNonZero(thresh)
+    coords  = cv2.findNonZero(thresh)
     if coords is None:
         return None, None, None
 
     x, y, w, h = cv2.boundingRect(coords)
     pad = 20
-    x1 = max(x - pad, 0);  y1 = max(y - pad, 0)
-    x2 = min(x + w + pad, thresh.shape[1]);  y2 = min(y + h + pad, thresh.shape[0])
-    crop = thresh[y1:y2, x1:x2]
+    x1, y1 = max(x - pad, 0), max(y - pad, 0)
+    x2, y2 = min(x + w + pad, thresh.shape[1]), min(y + h + pad, thresh.shape[0])
+    crop    = thresh[y1:y2, x1:x2]
 
     resized = cv2.resize(crop, (28, 28), interpolation=cv2.INTER_AREA)
-    flat = resized.astype("float32").reshape(1, -1) / 255.0
+    flat    = resized.astype("float64").reshape(1, -1) / 255.0
 
-    probs = model.predict_proba(flat)[0]
-    digit = int(np.argmax(probs))
+    probs   = mlp_predict(flat, weights)[0]
+    digit   = int(np.argmax(probs))
     return digit, LABELS[digit], probs
+
+# ─────────────────────────────────────────────────────────
+# Load model weights
+# ─────────────────────────────────────────────────────────
+weights = load_weights()
 
 # ─────────────────────────────────────────────────────────
 # UI
 # ─────────────────────────────────────────────────────────
 st.markdown('<h1 class="hero-title">🔢 Digit Recognition</h1>', unsafe_allow_html=True)
-st.markdown('<p class="hero-sub">Draw a digit · AI recognises it · Hear it spoken aloud</p>', unsafe_allow_html=True)
+st.markdown('<p class="hero-sub">Draw a digit &middot; AI recognises it &middot; Hear it spoken aloud</p>',
+            unsafe_allow_html=True)
 
 col_canvas, col_result = st.columns([1.1, 0.9], gap="large")
 
@@ -226,10 +215,10 @@ with col_canvas:
         drawing_mode="freedraw",
         key="canvas",
     )
-    btn_col1, btn_col2 = st.columns(2)
-    with btn_col1:
+    b1, b2 = st.columns(2)
+    with b1:
         predict_btn = st.button("🔍 Predict", use_container_width=True)
-    with btn_col2:
+    with b2:
         clear_btn = st.button("🗑️ Clear", use_container_width=True)
     if clear_btn:
         st.rerun()
@@ -238,13 +227,12 @@ with col_result:
     st.markdown('<div class="section-label">🎯 Prediction Result</div>', unsafe_allow_html=True)
 
     if predict_btn and canvas_result.image_data is not None:
-        digit, label, probs = predict_digit(canvas_result.image_data)
+        digit, label, probs = predict_digit(canvas_result.image_data, weights)
 
         if digit is None:
             st.warning("Canvas is empty — please draw a digit first!")
         else:
             confidence = float(probs[digit]) * 100
-
             st.markdown(f"""
             <div class="result-badge">
                 <div class="result-number">{digit}</div>
@@ -253,74 +241,62 @@ with col_result:
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown('<div class="section-label" style="margin-top:1rem">📊 All Probabilities</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-label" style="margin-top:1rem">📊 All Probabilities</div>',
+                        unsafe_allow_html=True)
             for i, p in enumerate(probs):
-                pct = float(p) * 100
-                is_top = (i == digit)
-                color = "#a78bfa" if is_top else "rgba(255,255,255,0.3)"
-                bar_bg = "linear-gradient(90deg,#a78bfa,#60a5fa)" if is_top else "rgba(255,255,255,0.2)"
+                pct   = float(p) * 100
+                top   = (i == digit)
+                color = "#a78bfa" if top else "rgba(255,255,255,0.3)"
+                bar   = "linear-gradient(90deg,#a78bfa,#60a5fa)" if top else "rgba(255,255,255,0.18)"
+                fw    = "700" if top else "400"
                 st.markdown(f"""
                 <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
-                    <span style="color:{color};font-weight:{'700' if is_top else '400'};
-                          font-size:0.85rem;width:52px;">{i} · {LABELS[i][:3]}</span>
-                    <div class="prob-bar-bg" style="flex:1;">
-                        <div class="prob-bar-fill" style="width:{pct:.1f}%;background:{bar_bg};"></div>
-                    </div>
-                    <span style="color:rgba(255,255,255,0.45);font-size:0.75rem;width:40px;">{pct:.1f}%</span>
+                  <span style="color:{color};font-weight:{fw};font-size:.85rem;width:52px;">
+                    {i} · {LABELS[i][:3]}</span>
+                  <div class="prob-bar-bg" style="flex:1;">
+                    <div style="height:100%;border-radius:8px;width:{pct:.1f}%;background:{bar};"></div>
+                  </div>
+                  <span style="color:rgba(255,255,255,0.45);font-size:.75rem;width:40px;">{pct:.1f}%</span>
                 </div>
                 """, unsafe_allow_html=True)
 
-            st.markdown('<div class="section-label" style="margin-top:1rem">🔊 Vocalization</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-label" style="margin-top:1rem">🔊 Vocalization</div>',
+                        unsafe_allow_html=True)
             audio_b64 = text_to_audio_b64(label)
             if audio_b64:
                 st.markdown(f"""
                 <audio autoplay controls>
-                    <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3">
-                </audio>
-                """, unsafe_allow_html=True)
+                  <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3">
+                </audio>""", unsafe_allow_html=True)
             else:
-                st.info("🔇 Audio unavailable (network required for gTTS)")
+                st.info("Audio unavailable (needs internet for gTTS)")
     else:
         st.markdown("""
         <div class="result-badge" style="min-height:180px;opacity:0.5;">
-            <div class="result-number" style="font-size:3rem;">?</div>
-            <div class="result-label">Awaiting Input</div>
-            <div class="result-conf">Draw a digit and click Predict</div>
-        </div>
-        """, unsafe_allow_html=True)
+          <div class="result-number" style="font-size:3rem;">?</div>
+          <div class="result-label">Awaiting Input</div>
+          <div class="result-conf">Draw a digit and click Predict</div>
+        </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
 # Footer
 # ─────────────────────────────────────────────────────────
 st.markdown("---")
 c1, c2, c3 = st.columns(3)
-with c1:
-    st.markdown("""
-    <div style="text-align:center;padding:1rem;">
-        <div style="font-size:2rem;">✏️</div>
-        <div style="color:rgba(255,255,255,0.85);font-weight:600;margin:0.5rem 0;">Draw</div>
-        <div style="color:rgba(255,255,255,0.4);font-size:0.85rem;">Use mouse or touch to draw any digit (0–9)</div>
-    </div>
-    """, unsafe_allow_html=True)
-with c2:
-    st.markdown("""
-    <div style="text-align:center;padding:1rem;">
-        <div style="font-size:2rem;">🧠</div>
-        <div style="color:rgba(255,255,255,0.85);font-weight:600;margin:0.5rem 0;">Recognise</div>
-        <div style="color:rgba(255,255,255,0.4);font-size:0.85rem;">MLP trained on 60,000 MNIST samples (~97% accuracy)</div>
-    </div>
-    """, unsafe_allow_html=True)
-with c3:
-    st.markdown("""
-    <div style="text-align:center;padding:1rem;">
-        <div style="font-size:2rem;">🔊</div>
-        <div style="color:rgba(255,255,255,0.85);font-weight:600;margin:0.5rem 0;">Vocalize</div>
-        <div style="color:rgba(255,255,255,0.4);font-size:0.85rem;">Digit is spoken aloud via Google Text-to-Speech</div>
-    </div>
-    """, unsafe_allow_html=True)
+for col, icon, title, desc in [
+    (c1, "✏️", "Draw",      "Use mouse or touch to draw any digit (0–9) on the canvas"),
+    (c2, "🧠", "Recognise", "MLP trained on 60,000 MNIST samples — 98% accuracy"),
+    (c3, "🔊", "Vocalize",  "Digit is spoken aloud via Google Text-to-Speech"),
+]:
+    with col:
+        st.markdown(f"""
+        <div style="text-align:center;padding:1rem;">
+          <div style="font-size:2rem;">{icon}</div>
+          <div style="color:rgba(255,255,255,0.85);font-weight:600;margin:.5rem 0;">{title}</div>
+          <div style="color:rgba(255,255,255,0.4);font-size:.85rem;">{desc}</div>
+        </div>""", unsafe_allow_html=True)
 
 st.markdown("""
-<div style="text-align:center;color:rgba(255,255,255,0.2);font-size:0.75rem;margin-top:2rem;">
-    Digit Recognition & Vocalization · sklearn MLP · MNIST · Streamlit
-</div>
-""", unsafe_allow_html=True)
+<div style="text-align:center;color:rgba(255,255,255,0.2);font-size:.75rem;margin-top:2rem;">
+  Digit Recognition &amp; Vocalization &middot; Pure NumPy MLP &middot; MNIST &middot; Streamlit
+</div>""", unsafe_allow_html=True)

@@ -195,6 +195,14 @@ def predict_digit(canvas_data: np.ndarray, weights: dict):
 weights = load_weights()
 
 # ─────────────────────────────────────────────────────────
+# Session state — persist prediction across reruns
+# ─────────────────────────────────────────────────────────
+if "canvas_key" not in st.session_state:
+    st.session_state.canvas_key = 0          # increment to reset canvas
+if "prediction" not in st.session_state:
+    st.session_state.prediction = None       # stores last result dict
+
+# ─────────────────────────────────────────────────────────
 # UI
 # ─────────────────────────────────────────────────────────
 st.markdown('<h1 class="hero-title">🔢 Digit Recognition</h1>', unsafe_allow_html=True)
@@ -213,7 +221,7 @@ with col_canvas:
         height=320,
         width=320,
         drawing_mode="freedraw",
-        key="canvas",
+        key=f"canvas_{st.session_state.canvas_key}",  # new key = fresh canvas
     )
     b1, b2 = st.columns(2)
     with b1:
@@ -221,47 +229,61 @@ with col_canvas:
     with b2:
         clear_btn = st.button("🗑️ Clear", use_container_width=True)
     if clear_btn:
+        st.session_state.canvas_key += 1     # reset canvas only, keep prediction
         st.rerun()
 
 with col_result:
     st.markdown('<div class="section-label">🎯 Prediction Result</div>', unsafe_allow_html=True)
 
+    # Run prediction and save to session_state
     if predict_btn and canvas_result.image_data is not None:
         digit, label, probs = predict_digit(canvas_result.image_data, weights)
-
         if digit is None:
             st.warning("Canvas is empty — please draw a digit first!")
         else:
-            confidence = float(probs[digit]) * 100
+            st.session_state.prediction = {
+                "digit": digit, "label": label, "probs": probs
+            }
+
+    # Always display from session_state (persists after Clear)
+    pred = st.session_state.prediction
+    if pred:
+        digit      = pred["digit"]
+        label      = pred["label"]
+        probs      = pred["probs"]
+        confidence = float(probs[digit]) * 100
+
+        st.markdown(f"""
+        <div class="result-badge">
+            <div class="result-number">{digit}</div>
+            <div class="result-label">{label}</div>
+            <div class="result-conf">Confidence: {confidence:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown('<div class="section-label" style="margin-top:1rem">📊 All Probabilities</div>',
+                    unsafe_allow_html=True)
+        for i, p in enumerate(probs):
+            pct   = float(p) * 100
+            top   = (i == digit)
+            color = "#a78bfa" if top else "rgba(255,255,255,0.3)"
+            bar   = "linear-gradient(90deg,#a78bfa,#60a5fa)" if top else "rgba(255,255,255,0.18)"
+            fw    = "700" if top else "400"
             st.markdown(f"""
-            <div class="result-badge">
-                <div class="result-number">{digit}</div>
-                <div class="result-label">{label}</div>
-                <div class="result-conf">Confidence: {confidence:.1f}%</div>
+            <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+              <span style="color:{color};font-weight:{fw};font-size:.85rem;width:52px;">
+                {i} · {LABELS[i][:3]}</span>
+              <div class="prob-bar-bg" style="flex:1;">
+                <div style="height:100%;border-radius:8px;width:{pct:.1f}%;background:{bar};"></div>
+              </div>
+              <span style="color:rgba(255,255,255,0.45);font-size:.75rem;width:40px;">{pct:.1f}%</span>
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown('<div class="section-label" style="margin-top:1rem">📊 All Probabilities</div>',
-                        unsafe_allow_html=True)
-            for i, p in enumerate(probs):
-                pct   = float(p) * 100
-                top   = (i == digit)
-                color = "#a78bfa" if top else "rgba(255,255,255,0.3)"
-                bar   = "linear-gradient(90deg,#a78bfa,#60a5fa)" if top else "rgba(255,255,255,0.18)"
-                fw    = "700" if top else "400"
-                st.markdown(f"""
-                <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
-                  <span style="color:{color};font-weight:{fw};font-size:.85rem;width:52px;">
-                    {i} · {LABELS[i][:3]}</span>
-                  <div class="prob-bar-bg" style="flex:1;">
-                    <div style="height:100%;border-radius:8px;width:{pct:.1f}%;background:{bar};"></div>
-                  </div>
-                  <span style="color:rgba(255,255,255,0.45);font-size:.75rem;width:40px;">{pct:.1f}%</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.markdown('<div class="section-label" style="margin-top:1rem">🔊 Vocalization</div>',
-                        unsafe_allow_html=True)
+        st.markdown('<div class="section-label" style="margin-top:1rem">🔊 Vocalization</div>',
+                    unsafe_allow_html=True)
+        # Only play audio when Predict was just clicked
+        if predict_btn:
             audio_b64 = text_to_audio_b64(label)
             if audio_b64:
                 st.markdown(f"""
@@ -270,6 +292,9 @@ with col_result:
                 </audio>""", unsafe_allow_html=True)
             else:
                 st.info("Audio unavailable (needs internet for gTTS)")
+        else:
+            st.markdown(f"<p style='color:rgba(255,255,255,0.4);font-size:.9rem;'>Last spoken: <b style='color:#a78bfa'>{label}</b></p>",
+                        unsafe_allow_html=True)
     else:
         st.markdown("""
         <div class="result-badge" style="min-height:180px;opacity:0.5;">

@@ -1,20 +1,20 @@
 import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # suppress TF logs
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # suppress TF C++ logs
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # suppress oneDNN warnings
 
 import streamlit as st
 import numpy as np
 import cv2
-from PIL import Image
 import io
 import base64
 from streamlit_drawable_canvas import st_canvas
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras.datasets import mnist
-from tensorflow.keras.models import Sequential
+from tensorflow.keras import Sequential
 from tensorflow.keras.layers import Dense, Conv2D, MaxPool2D, Flatten, Dropout
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.datasets import mnist
 import requests
 
 # ─────────────────────────────────────────────────────────

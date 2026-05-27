@@ -1,8 +1,9 @@
 streamlit==1.32.0
-tensorflow-cpu==2.15.0
-numpy==1.26.4
-opencv-python-headless==4.9.0.80
-Pillow==10.3.0
+tensorflow-cpu==2.13.0
+keras==2.13.1
+numpy==1.24.4
+opencv-python-headless==4.8.1.78
+Pillow==10.2.0
 streamlit-drawable-canvas==0.9.3
 gTTS==2.5.1
 requests==2.31.0

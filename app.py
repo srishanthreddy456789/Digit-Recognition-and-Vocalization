@@ -213,7 +213,7 @@ def predict_digit(canvas_data: np.ndarray, weights: dict):
     # Slight blur first to smooth canvas anti-aliasing
     gray  = cv2.cvtColor(canvas_data.astype(np.uint8), cv2.COLOR_RGBA2GRAY)
     gray  = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, thresh = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
+    _, thresh = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
 
     coords = cv2.findNonZero(thresh)
     if coords is None:
@@ -259,7 +259,7 @@ with col_canvas:
         fill_color="rgba(0,0,0,0)",
         stroke_width=18,
         stroke_color="#FFFFFF",
-        background_color="#1a1a2e",
+        background_color="#000000",
         height=320,
         width=320,
         drawing_mode="freedraw",

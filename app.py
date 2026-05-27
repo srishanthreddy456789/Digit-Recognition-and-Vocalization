@@ -271,7 +271,8 @@ with col_canvas:
     with b2:
         clear_btn = st.button("🗑️ Clear", use_container_width=True)
     if clear_btn:
-        st.session_state.canvas_key += 1     # reset canvas only, keep prediction
+        st.session_state.canvas_key += 1     # reset canvas
+        st.session_state.prediction = None   # reset prediction output too
         st.rerun()
 
 with col_result:
